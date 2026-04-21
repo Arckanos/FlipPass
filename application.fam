@@ -28,7 +28,7 @@ App(
     name="FlipPass",
     apptype=FlipperAppType.EXTERNAL,
     entry_point="flippass_app",
-    fap_version="1.1",
+    fap_version="1.2",
     fap_author="Arckanos",
     fap_description="KeePass KDBX 4 vault browser with USB and Bluetooth HID typing.",
     fap_weburl="https://github.com/Arckanos/FlipPass",
