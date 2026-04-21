@@ -54,13 +54,6 @@ static const char* flippass_entry_action_log_label(const App* app, FlipPassEntry
         }
         return "other";
     case FlipPassEntryActionNone:
-    case FlipPassEntryActionShowDetails:
-    case FlipPassEntryActionRevealUsername:
-    case FlipPassEntryActionRevealPassword:
-    case FlipPassEntryActionRevealUrl:
-    case FlipPassEntryActionRevealNotes:
-    case FlipPassEntryActionRevealAutoType:
-    case FlipPassEntryActionBrowseOtherFields:
     default:
         return "unknown";
     }
@@ -103,6 +96,10 @@ static bool flippass_entry_action_can_materialize_ref(const KDBXFieldRef* ref) {
 
     return required <= max_free_block &&
            required + FLIPPASS_TYPE_LOAD_HEAP_RESERVE_BYTES <= free_heap;
+}
+
+static bool flippass_entry_action_should_stream_ref(const KDBXFieldRef* ref) {
+    return ref != NULL && !kdbx_vault_ref_is_empty(ref) && ref->record_count > 1U;
 }
 
 static bool flippass_entry_action_load_ref_text(
@@ -200,6 +197,10 @@ bool flippass_entry_action_execute_pending(App* app, FuriString* error) {
         flippass_entry_action_transport(app->pending_entry_action);
     const char* log_prefix = flippass_entry_action_log_prefix(transport);
     const char* log_label = flippass_entry_action_log_label(app, app->pending_entry_action);
+#if !FLIPPASS_ENABLE_LOGS
+    UNUSED(log_prefix);
+    UNUSED(log_label);
+#endif
 
     if(entry == NULL) {
         if(error != NULL) {
@@ -296,19 +297,17 @@ bool flippass_entry_action_execute_pending(App* app, FuriString* error) {
         char_count = flippass_entry_action_text_or_ref_len(other_value, other_ref);
         break;
     case FlipPassEntryActionNone:
-    case FlipPassEntryActionShowDetails:
-    case FlipPassEntryActionRevealUsername:
-    case FlipPassEntryActionRevealPassword:
-    case FlipPassEntryActionRevealUrl:
-    case FlipPassEntryActionRevealNotes:
-    case FlipPassEntryActionRevealAutoType:
-    case FlipPassEntryActionBrowseOtherFields:
     default:
         if(error != NULL) {
             furi_string_set_str(
                 error, "Pick a USB or Bluetooth typing action from the browser first.");
         }
         return false;
+    }
+
+    if(flippass_typing_should_cancel(app)) {
+        typed = false;
+        goto finish;
     }
 
     FLIPPASS_BENCH_LOG(
@@ -321,7 +320,10 @@ bool flippass_entry_action_execute_pending(App* app, FuriString* error) {
     switch(app->pending_entry_action) {
     case FlipPassEntryActionTypeUsernameUsb:
     case FlipPassEntryActionTypeUsernameBluetooth:
-        if(username_value != NULL) {
+        /* Keep large deferred fields on the streamed send path even after Show loaded them. */
+        if(flippass_entry_action_should_stream_ref(username_ref)) {
+            typed = flippass_output_type_vault_ref(app, transport, app->vault, username_ref);
+        } else if(username_value != NULL) {
             typed = flippass_output_type_string(app, transport, username_value);
         } else if(!flippass_entry_action_can_materialize_ref(username_ref)) {
             typed = flippass_output_type_vault_ref(app, transport, app->vault, username_ref);
@@ -333,7 +335,9 @@ bool flippass_entry_action_execute_pending(App* app, FuriString* error) {
         break;
     case FlipPassEntryActionTypePasswordUsb:
     case FlipPassEntryActionTypePasswordBluetooth:
-        if(password_value != NULL) {
+        if(flippass_entry_action_should_stream_ref(password_ref)) {
+            typed = flippass_output_type_vault_ref(app, transport, app->vault, password_ref);
+        } else if(password_value != NULL) {
             typed = flippass_output_type_string(app, transport, password_value);
         } else if(!flippass_entry_action_can_materialize_ref(password_ref)) {
             typed = flippass_output_type_vault_ref(app, transport, app->vault, password_ref);
@@ -349,6 +353,11 @@ bool flippass_entry_action_execute_pending(App* app, FuriString* error) {
            (autotype_ref != NULL && !kdbx_vault_ref_is_empty(autotype_ref))) {
             typed = flippass_db_activate_entry(app, entry, false, error) &&
                     flippass_output_type_autotype(app, transport, entry);
+        } else if(
+            flippass_entry_action_should_stream_ref(username_ref) ||
+            flippass_entry_action_should_stream_ref(password_ref)) {
+            typed = flippass_output_type_login_refs(
+                app, transport, app->vault, username_ref, password_ref);
         } else if(username_value != NULL && password_value != NULL) {
             typed = flippass_output_type_login(app, transport, username_value, password_value);
         } else if(
@@ -366,7 +375,11 @@ bool flippass_entry_action_execute_pending(App* app, FuriString* error) {
         break;
     case FlipPassEntryActionTypeLoginUsb:
     case FlipPassEntryActionTypeLoginBluetooth:
-        if(username_value != NULL && password_value != NULL) {
+        if(flippass_entry_action_should_stream_ref(username_ref) ||
+           flippass_entry_action_should_stream_ref(password_ref)) {
+            typed = flippass_output_type_login_refs(
+                app, transport, app->vault, username_ref, password_ref);
+        } else if(username_value != NULL && password_value != NULL) {
             typed = flippass_output_type_login(app, transport, username_value, password_value);
         } else if(
             !flippass_entry_action_can_materialize_ref(username_ref) ||
@@ -383,7 +396,9 @@ bool flippass_entry_action_execute_pending(App* app, FuriString* error) {
         break;
     case FlipPassEntryActionTypeOtherUsb:
     case FlipPassEntryActionTypeOtherBluetooth:
-        if(other_value != NULL) {
+        if(flippass_entry_action_should_stream_ref(other_ref)) {
+            typed = flippass_output_type_vault_ref(app, transport, app->vault, other_ref);
+        } else if(other_value != NULL) {
             typed = flippass_output_type_string(app, transport, other_value);
         } else if(!flippass_entry_action_can_materialize_ref(other_ref)) {
             typed = flippass_output_type_vault_ref(app, transport, app->vault, other_ref);
@@ -394,24 +409,26 @@ bool flippass_entry_action_execute_pending(App* app, FuriString* error) {
         }
         break;
     case FlipPassEntryActionNone:
-    case FlipPassEntryActionShowDetails:
-    case FlipPassEntryActionRevealUsername:
-    case FlipPassEntryActionRevealPassword:
-    case FlipPassEntryActionRevealUrl:
-    case FlipPassEntryActionRevealNotes:
-    case FlipPassEntryActionRevealAutoType:
-    case FlipPassEntryActionBrowseOtherFields:
     default:
         typed = false;
         break;
     }
 
+finish:
     flippass_entry_action_free_temp_text(&temp_username, &temp_username_size);
     flippass_entry_action_free_temp_text(&temp_password, &temp_password_size);
     flippass_entry_action_free_temp_text(&temp_other, &temp_other_size);
     UNUSED(char_count);
 
-    flippass_log_event(
+    if(!typed && flippass_typing_should_cancel(app)) {
+        FLIPPASS_LOG_EVENT(app, "%s_TYPE_CANCEL field=%s", log_prefix, log_label);
+        if(error != NULL && furi_string_empty(error)) {
+            furi_string_set_str(error, "Typing canceled.");
+        }
+        return false;
+    }
+
+    FLIPPASS_LOG_EVENT(
         app,
         typed ? "%s_TYPE_OK field=%s" : "%s_TYPE_FAIL field=%s",
         log_prefix,

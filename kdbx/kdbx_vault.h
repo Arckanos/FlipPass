@@ -101,9 +101,11 @@ void kdbx_vault_writer_reset_with_pending(
     uint8_t* pending,
     size_t pending_capacity);
 void kdbx_vault_writer_set_file_streaming(KDBXVaultWriter* writer, bool enabled);
+void kdbx_vault_writer_close(KDBXVaultWriter* writer);
 void kdbx_vault_writer_abort(KDBXVaultWriter* writer);
 bool kdbx_vault_writer_write(KDBXVaultWriter* writer, const uint8_t* data, size_t len);
 bool kdbx_vault_writer_finish(KDBXVaultWriter* writer, KDBXFieldRef* out_ref);
+bool kdbx_vault_writer_finish_keep_stream(KDBXVaultWriter* writer, KDBXFieldRef* out_ref);
 void kdbx_vault_reader_reset(KDBXVaultReader* reader, KDBXVault* vault, const KDBXFieldRef* ref);
 bool kdbx_vault_reader_read(KDBXVaultReader* reader, uint8_t* out, size_t capacity, size_t* out_size);
 bool kdbx_vault_ref_is_empty(const KDBXFieldRef* ref);
