@@ -23,8 +23,11 @@ enum {
     FlipPassSceneDbEntriesEventSelectUsbLayout,
     FlipPassSceneDbEntriesEventSelectBluetoothLayout,
     FlipPassSceneDbEntriesEventOpenOtherFields,
+    FlipPassSceneDbEntriesEventEditSelected,
     FlipPassSceneDbEntriesEventRunPendingAction,
     FlipPassSceneDbEntriesEventConfirmCloseDatabase = 0x100U,
+    FlipPassSceneDbEntriesEventCreateGroup,
+    FlipPassSceneDbEntriesEventCreateEntry,
 };
 
 /**

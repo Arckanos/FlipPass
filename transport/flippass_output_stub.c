@@ -84,12 +84,27 @@ bool flippass_output_bluetooth_advertise(App* app) {
     return false;
 }
 
+bool flippass_output_prewarm_transport(App* app, FlipPassOutputTransport transport) {
+    UNUSED(app);
+    UNUSED(transport);
+    return false;
+}
+
 void flippass_output_bluetooth_get_name(char* buffer, size_t size) {
     if(buffer != NULL && size > 0U) {
         buffer[0] = '\0';
     }
 }
 
+void flippass_output_cleanup_transport(App* app, FlipPassOutputTransport transport) {
+    UNUSED(app);
+    UNUSED(transport);
+}
+
 void flippass_output_cleanup(App* app) {
+    UNUSED(app);
+}
+
+void flippass_usb_restore(App* app) {
     UNUSED(app);
 }

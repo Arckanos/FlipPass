@@ -1,3 +1,7 @@
+v2.0:
+
+- Have it all!: KDBX modification/creation, high-entropy password generation, OTP calculation, what more could you want?!
+
 v1.2:
 
 - Faster Openings!: The new plugin management allows for optimized memory usage, resulting in more stable and faster openings (KDF speed was not affected).

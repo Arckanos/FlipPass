@@ -97,6 +97,16 @@ extern "C"
         Storage* storage;
         size_t preferred_cache_pages;
         size_t minimum_cache_pages;
+        bool (*crypt_page)(
+            void* context,
+            uint16_t page_index,
+            uint8_t* page,
+            size_t page_size,
+            bool encrypt,
+            const uint8_t* expected_mac,
+            uint8_t* out_mac,
+            size_t mac_size);
+        void* crypt_context;
     } tinfl_paged_file_config;
 
     /* Return status. */
@@ -154,13 +164,20 @@ extern "C"
     MINIZ_EXPORT int tinfl_file_paged_probe(const tinfl_paged_file_config* pFile_config, tinfl_paged_telemetry* pTelemetry);
 
     /* Internal/private bits follow. */
+#ifndef TINFL_FAST_LOOKUP_BITS
+#define TINFL_FAST_LOOKUP_BITS 10
+#endif
+
+#if TINFL_FAST_LOOKUP_BITS < 8 || TINFL_FAST_LOOKUP_BITS > 10
+#error "TINFL_FAST_LOOKUP_BITS must stay between 8 and 10 for FlipPass tinfl builds."
+#endif
+
     enum
     {
         TINFL_MAX_HUFF_TABLES = 3,
         TINFL_MAX_HUFF_SYMBOLS_0 = 288,
         TINFL_MAX_HUFF_SYMBOLS_1 = 32,
         TINFL_MAX_HUFF_SYMBOLS_2 = 19,
-        TINFL_FAST_LOOKUP_BITS = 10,
         TINFL_FAST_LOOKUP_SIZE = 1 << TINFL_FAST_LOOKUP_BITS
     };
 

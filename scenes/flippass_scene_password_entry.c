@@ -29,7 +29,10 @@ static void flippass_scene_password_entry_set_header(App* app) {
         snprintf(
             app->password_header,
             sizeof(app->password_header),
-            "Pass for %s",
+            (app->editor_mode == FlipPassEditorModeModifyDatabase &&
+             app->editor_return_scene == FlipPassScene_FileBrowser) ?
+                "Pass for Mod. %s" :
+                "Pass for %s",
             furi_string_get_cstr(file_name));
     }
     furi_string_free(file_name);
@@ -195,6 +198,16 @@ bool flippass_scene_password_entry_on_event(void* context, SceneManagerEvent eve
     if(event.type == SceneManagerEventTypeBack) {
         flippass_clear_text_buffer(app);
         flippass_clear_master_password(app);
+        if(app->editor_mode == FlipPassEditorModeModifyDatabase &&
+           app->editor_return_scene == FlipPassScene_FileBrowser && !app->database_loaded) {
+            app->editor_mode = FlipPassEditorModeNone;
+            app->editor_text_target = FlipPassEditorTextTargetNone;
+            app->editor_group = NULL;
+            app->editor_entry = NULL;
+            app->editor_selected_index = 0U;
+            app->editor_return_scene = FlipPassScene_FileBrowser;
+            app->editor_close_after_commit = false;
+        }
         if(!scene_manager_previous_scene(app->scene_manager)) {
             flippass_request_exit(app);
         }
