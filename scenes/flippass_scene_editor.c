@@ -1971,9 +1971,13 @@ static void flippass_editor_text_input_done(void* context) {
     App* app = context;
     const FlipPassEditorTextTarget original_target = app->editor_text_target;
     const FlipPassPasswordGenTarget generator_target = flippass_editor_password_gen_target(app);
+    size_t accepted_size = 0U;
+    const char* accepted_text =
+        flippass_editor_text_buffer(app, original_target, &accepted_size);
 
     app->editor_text_target = FlipPassEditorTextTargetNone;
-    if(generator_target != FlipPassPasswordGenTargetNone && app->text_buffer[0] == '\0') {
+    if(generator_target != FlipPassPasswordGenTargetNone && accepted_text != NULL &&
+       accepted_size > 0U && accepted_text[0] == '\0') {
         flippass_password_generator_prepare(app, generator_target);
         scene_manager_previous_scene(app->scene_manager);
         scene_manager_next_scene(app->scene_manager, FlipPassScene_PasswordGenerator);
