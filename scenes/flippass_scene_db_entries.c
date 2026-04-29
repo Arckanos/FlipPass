@@ -13,8 +13,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#define FLIPPASS_EDITOR_ENTRY_SAVE_ROW 8U
-
 typedef struct {
     FlipPassDbBrowserItemType type;
     KDBXGroup* group;
@@ -301,7 +299,7 @@ static bool flippass_browser_prepare_entry_editor(
     app->editor_group = app->current_group;
     app->editor_entry = entry;
     app->editor_selected_index =
-        (mode == FlipPassEditorModeEditEntry) ? FLIPPASS_EDITOR_ENTRY_SAVE_ROW : 0U;
+        (mode == FlipPassEditorModeEditEntry) ? FlipPassEditorEntryRowCommit : 0U;
     app->editor_return_scene = FlipPassScene_DbEntries;
     app->editor_close_after_commit = false;
     if(mode == FlipPassEditorModeAddEntry || mode == FlipPassEditorModeEditEntry) {
@@ -576,6 +574,9 @@ static void flippass_browser_view_callback(FlipPassDbBrowserEvent event, void* c
         custom_event = (app->action_selected_index == 0U) ?
                            FlipPassSceneDbEntriesEventCreateGroup :
                            FlipPassSceneDbEntriesEventCreateEntry;
+        break;
+    case FlipPassDbBrowserEventCloseActionMenu:
+        custom_event = FlipPassSceneDbEntriesEventCloseActionMenu;
         break;
     default:
         break;
@@ -874,6 +875,11 @@ bool flippass_scene_db_entries_on_event(void* context, SceneManagerEvent event) 
             return true;
         }
 
+        if(event.event == FlipPassSceneDbEntriesEventCloseActionMenu) {
+            flippass_entry_action_cleanup_type_menu(app);
+            return true;
+        }
+
         if(event.event == FlipPassSceneDbEntriesEventCreateGroup) {
             flippass_db_browser_view_set_action_menu_open(app->db_browser, false);
             flippass_browser_prepare_group_editor(
@@ -987,6 +993,7 @@ void flippass_scene_db_entries_on_exit(void* context) {
     flippass_browser_sync_selection_from_view(app);
     flippass_db_browser_view_set_action_menu_open(app->db_browser, false);
     flippass_db_browser_view_set_back_filter(app->db_browser, NULL);
+    flippass_entry_action_cleanup_type_menu(app);
     flippass_browser_items_free();
     flippass_browser_hide_dialog(app, false);
 }

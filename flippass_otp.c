@@ -486,7 +486,7 @@ bool flippass_otp_generate_code(
     request.period = config.period;
     request.counter = config.counter;
     request.unix_time = flippass_otp_unix_time_now();
-    request.time_zone_offset_seconds = (int32_t)app->otp_time_zone_hours * 3600;
+    request.time_zone_offset_seconds = (int32_t)app->otp_time_zone_minutes * 60;
 
     ok = plugin->generate(&request, &result, error);
     flippass_module_unload(app, FlipPassModuleSlotOtp);

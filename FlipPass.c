@@ -31,6 +31,8 @@
 #define FLIPPASS_TYPING_BACK_SUPPRESS_MS 250U
 #define FLIPPASS_SCENE_TICK_MS 100U
 #define FLIPPASS_SECURE_STORE_SEED "FlipPass sealed storage v1"
+#define FLIPPASS_SESSION_CREDENTIAL_SEED "FlipPass session credential v1"
+#define FLIPPASS_SESSION_SAVE_KEY_LABEL "database_save_key"
 #define FLIPPASS_BADUSB_SETTINGS_FILE_TYPE "Flipper BadUSB Settings File"
 #define FLIPPASS_BADUSB_SETTINGS_VERSION 1U
 
@@ -69,6 +71,7 @@ static void flippass_system_log_capture_init(App* app);
 static void flippass_system_log_capture_deinit(App* app);
 #endif
 static void flippass_update_last_interaction(App* app);
+static void flippass_idle_tick(App* app);
 static bool flippass_secure_write_device_encrypted_string(
     FlipperFormat* file,
     const char* key_prefix,
@@ -107,6 +110,7 @@ static void flippass_tick_event_callback(void* context) {
     App* app = context;
 
     if(app != NULL && app->scene_manager != NULL) {
+        flippass_idle_tick(app);
         scene_manager_handle_tick_event(app->scene_manager);
     }
 }
@@ -325,6 +329,271 @@ static void flippass_secure_storage_mac(
         hmac_sha256_Update(&ctx, ciphertext, ciphertext_size);
     }
     hmac_sha256_Final(&ctx, mac);
+}
+
+static bool flippass_constant_time_equal(const uint8_t* left, const uint8_t* right, size_t size) {
+    uint8_t diff = 0U;
+
+    furi_assert(left);
+    furi_assert(right);
+
+    for(size_t index = 0U; index < size; index++) {
+        diff |= left[index] ^ right[index];
+    }
+
+    return diff == 0U;
+}
+
+static uint32_t flippass_ms_to_ticks(uint32_t ms) {
+    const uint32_t tick_hz = furi_kernel_get_tick_frequency();
+    if(tick_hz == 0U) {
+        return ms;
+    }
+
+    const uint64_t ticks = (((uint64_t)ms * tick_hz) + 999U) / 1000U;
+    return ticks > UINT32_MAX ? UINT32_MAX : (uint32_t)ticks;
+}
+
+static uint32_t flippass_minutes_to_ms(uint16_t minutes) {
+    return (uint32_t)minutes * 60U * 1000U;
+}
+
+void flippass_make_password_composite_key(const char* password, uint8_t out_key[32]) {
+    uint8_t password_hash[32];
+
+    furi_assert(password);
+    furi_assert(out_key);
+
+    sha256_Raw((const uint8_t*)password, strlen(password), password_hash);
+    sha256_Raw(password_hash, sizeof(password_hash), out_key);
+    memzero(password_hash, sizeof(password_hash));
+}
+
+static void flippass_session_derive_keys(
+    const uint8_t session_key[FLIPPASS_SESSION_SECRET_SIZE],
+    const char* purpose,
+    uint8_t enc_key[32],
+    uint8_t mac_key[32]) {
+    uint8_t hash[64];
+    SHA512_CTX ctx;
+
+    furi_assert(session_key);
+    furi_assert(purpose);
+    furi_assert(enc_key);
+    furi_assert(mac_key);
+
+    sha512_Init(&ctx);
+    sha512_Update(
+        &ctx,
+        (const uint8_t*)FLIPPASS_SESSION_CREDENTIAL_SEED,
+        strlen(FLIPPASS_SESSION_CREDENTIAL_SEED));
+    sha512_Update(&ctx, (const uint8_t*)purpose, strlen(purpose));
+    sha512_Update(&ctx, session_key, FLIPPASS_SESSION_SECRET_SIZE);
+    sha512_Final(&ctx, hash);
+    memcpy(enc_key, hash, 32U);
+    memcpy(mac_key, hash + 32U, 32U);
+    memzero(hash, sizeof(hash));
+}
+
+static bool flippass_session_wrap_key(
+    const uint8_t session_key[FLIPPASS_SESSION_SECRET_SIZE],
+    uint8_t iv[FLIPPASS_SESSION_WRAP_IV_SIZE],
+    uint8_t wrapped_key[FLIPPASS_SESSION_SECRET_SIZE]) {
+    bool ok = false;
+    bool loaded = false;
+
+    furi_assert(session_key);
+    furi_assert(iv);
+    furi_assert(wrapped_key);
+
+    furi_hal_random_fill_buf(iv, FLIPPASS_SESSION_WRAP_IV_SIZE);
+    if(!furi_hal_crypto_enclave_ensure_key(FURI_HAL_CRYPTO_ENCLAVE_UNIQUE_KEY_SLOT)) {
+        goto cleanup;
+    }
+
+    if(!furi_hal_crypto_enclave_load_key(FURI_HAL_CRYPTO_ENCLAVE_UNIQUE_KEY_SLOT, iv)) {
+        goto cleanup;
+    }
+    loaded = true;
+
+    ok = furi_hal_crypto_encrypt(session_key, wrapped_key, FLIPPASS_SESSION_SECRET_SIZE);
+
+cleanup:
+    if(loaded) {
+        const bool unload_ok =
+            furi_hal_crypto_enclave_unload_key(FURI_HAL_CRYPTO_ENCLAVE_UNIQUE_KEY_SLOT);
+        ok = ok && unload_ok;
+    }
+    if(!ok) {
+        memzero(iv, FLIPPASS_SESSION_WRAP_IV_SIZE);
+        memzero(wrapped_key, FLIPPASS_SESSION_SECRET_SIZE);
+    }
+    return ok;
+}
+
+static bool flippass_session_unwrap_key(
+    const uint8_t iv[FLIPPASS_SESSION_WRAP_IV_SIZE],
+    const uint8_t wrapped_key[FLIPPASS_SESSION_SECRET_SIZE],
+    uint8_t session_key[FLIPPASS_SESSION_SECRET_SIZE]) {
+    bool ok = false;
+    bool loaded = false;
+
+    furi_assert(iv);
+    furi_assert(wrapped_key);
+    furi_assert(session_key);
+
+    if(!furi_hal_crypto_enclave_load_key(FURI_HAL_CRYPTO_ENCLAVE_UNIQUE_KEY_SLOT, iv)) {
+        goto cleanup;
+    }
+    loaded = true;
+
+    ok = furi_hal_crypto_decrypt(wrapped_key, session_key, FLIPPASS_SESSION_SECRET_SIZE);
+
+cleanup:
+    if(loaded) {
+        const bool unload_ok =
+            furi_hal_crypto_enclave_unload_key(FURI_HAL_CRYPTO_ENCLAVE_UNIQUE_KEY_SLOT);
+        ok = ok && unload_ok;
+    }
+    if(!ok) {
+        memzero(session_key, FLIPPASS_SESSION_SECRET_SIZE);
+    }
+    return ok;
+}
+
+void flippass_session_clear_credentials(App* app) {
+    furi_assert(app);
+
+    memzero(app->session_key_iv, sizeof(app->session_key_iv));
+    memzero(app->session_key_cipher, sizeof(app->session_key_cipher));
+    memzero(app->database_save_key_nonce, sizeof(app->database_save_key_nonce));
+    memzero(app->database_save_key_cipher, sizeof(app->database_save_key_cipher));
+    memzero(app->database_save_key_mac, sizeof(app->database_save_key_mac));
+    app->database_save_key_ready = false;
+}
+
+bool flippass_session_store_save_key(App* app, const uint8_t save_key[32]) {
+    uint8_t session_key[FLIPPASS_SESSION_SECRET_SIZE];
+    uint8_t enc_key[32];
+    uint8_t mac_key[32];
+    uint8_t credential_cipher[FLIPPASS_SESSION_SECRET_SIZE];
+    uint8_t credential_nonce[FLIPPASS_SECURE_VALUE_NONCE_SIZE];
+    uint8_t credential_mac[FLIPPASS_SECURE_VALUE_MAC_SIZE];
+    uint8_t wrapped_key[FLIPPASS_SESSION_SECRET_SIZE];
+    uint8_t wrap_iv[FLIPPASS_SESSION_WRAP_IV_SIZE];
+    bool ok = false;
+
+    furi_assert(app);
+    furi_assert(save_key);
+
+    flippass_session_clear_credentials(app);
+
+    furi_hal_random_fill_buf(session_key, sizeof(session_key));
+    furi_hal_random_fill_buf(credential_nonce, sizeof(credential_nonce));
+    if(!flippass_session_wrap_key(session_key, wrap_iv, wrapped_key)) {
+        goto cleanup;
+    }
+
+    flippass_session_derive_keys(session_key, FLIPPASS_SESSION_SAVE_KEY_LABEL, enc_key, mac_key);
+    memcpy(credential_cipher, save_key, sizeof(credential_cipher));
+    flippass_secure_storage_xor(
+        credential_cipher, sizeof(credential_cipher), enc_key, credential_nonce);
+    flippass_secure_storage_mac(
+        FLIPPASS_SESSION_SAVE_KEY_LABEL,
+        mac_key,
+        credential_nonce,
+        credential_cipher,
+        sizeof(credential_cipher),
+        credential_mac);
+
+    memcpy(app->session_key_iv, wrap_iv, sizeof(app->session_key_iv));
+    memcpy(app->session_key_cipher, wrapped_key, sizeof(app->session_key_cipher));
+    memcpy(app->database_save_key_nonce, credential_nonce, sizeof(app->database_save_key_nonce));
+    memcpy(app->database_save_key_cipher, credential_cipher, sizeof(app->database_save_key_cipher));
+    memcpy(app->database_save_key_mac, credential_mac, sizeof(app->database_save_key_mac));
+    app->database_save_key_ready = true;
+    ok = true;
+
+cleanup:
+    if(!ok) {
+        flippass_session_clear_credentials(app);
+    }
+    memzero(session_key, sizeof(session_key));
+    memzero(enc_key, sizeof(enc_key));
+    memzero(mac_key, sizeof(mac_key));
+    memzero(credential_cipher, sizeof(credential_cipher));
+    memzero(credential_nonce, sizeof(credential_nonce));
+    memzero(credential_mac, sizeof(credential_mac));
+    memzero(wrapped_key, sizeof(wrapped_key));
+    memzero(wrap_iv, sizeof(wrap_iv));
+    return ok;
+}
+
+bool flippass_session_copy_save_key(App* app, uint8_t out_key[32]) {
+    uint8_t session_key[FLIPPASS_SESSION_SECRET_SIZE];
+    uint8_t enc_key[32];
+    uint8_t mac_key[32];
+    uint8_t expected_mac[FLIPPASS_SECURE_VALUE_MAC_SIZE];
+    bool ok = false;
+
+    furi_assert(app);
+    furi_assert(out_key);
+
+    memzero(out_key, 32U);
+    if(!app->database_save_key_ready) {
+        return false;
+    }
+
+    if(!flippass_session_unwrap_key(app->session_key_iv, app->session_key_cipher, session_key)) {
+        goto cleanup;
+    }
+
+    flippass_session_derive_keys(session_key, FLIPPASS_SESSION_SAVE_KEY_LABEL, enc_key, mac_key);
+    flippass_secure_storage_mac(
+        FLIPPASS_SESSION_SAVE_KEY_LABEL,
+        mac_key,
+        app->database_save_key_nonce,
+        app->database_save_key_cipher,
+        sizeof(app->database_save_key_cipher),
+        expected_mac);
+    if(!flippass_constant_time_equal(
+           app->database_save_key_mac, expected_mac, sizeof(expected_mac))) {
+        goto cleanup;
+    }
+
+    memcpy(out_key, app->database_save_key_cipher, sizeof(app->database_save_key_cipher));
+    flippass_secure_storage_xor(out_key, 32U, enc_key, app->database_save_key_nonce);
+    ok = true;
+
+cleanup:
+    if(!ok) {
+        memzero(out_key, 32U);
+    }
+    memzero(session_key, sizeof(session_key));
+    memzero(enc_key, sizeof(enc_key));
+    memzero(mac_key, sizeof(mac_key));
+    memzero(expected_mac, sizeof(expected_mac));
+    return ok;
+}
+
+bool flippass_session_verify_password(App* app, const char* password) {
+    uint8_t expected_key[32];
+    uint8_t stored_key[32];
+    bool ok = false;
+
+    furi_assert(app);
+
+    if(password == NULL || password[0] == '\0') {
+        return false;
+    }
+
+    flippass_make_password_composite_key(password, expected_key);
+    ok = flippass_session_copy_save_key(app, stored_key) &&
+         flippass_constant_time_equal(expected_key, stored_key, sizeof(expected_key));
+
+    memzero(expected_key, sizeof(expected_key));
+    memzero(stored_key, sizeof(stored_key));
+    return ok;
 }
 
 static bool flippass_secure_write_encrypted_string_mode(
@@ -579,6 +848,57 @@ static bool flippass_secure_read_device_encrypted_string(
 
     furi_string_reset(out_value);
     return false;
+}
+
+static bool flippass_idle_lock_can_prompt(const App* app, uint32_t current_scene) {
+    if(app == NULL || app->idle_lock_active || app->typing_active ||
+       app->progress_started_tick != 0U) {
+        return false;
+    }
+
+    if(!app->database_loaded || app->root_group == NULL || !app->database_save_key_ready) {
+        return false;
+    }
+
+    return current_scene != FlipPassScene_PasswordEntry &&
+           current_scene != FlipPassScene_VaultFallback &&
+           current_scene != FlipPassScene_PasswordGeneratorHarvest;
+}
+
+static void flippass_idle_request_lock(App* app) {
+    furi_assert(app);
+
+    app->idle_lock_active = true;
+    app->idle_lock_failed_attempts = 0U;
+    flippass_output_cleanup(app);
+    flippass_clear_text_buffer(app);
+    flippass_clear_master_password(app);
+    FLIPPASS_LOG_EVENT(app, "IDLE_LOCK");
+    scene_manager_next_scene(app->scene_manager, FlipPassScene_PasswordEntry);
+}
+
+static void flippass_idle_tick(App* app) {
+    furi_assert(app);
+
+    if(app->last_interaction_tick == 0U || app->scene_manager == NULL) {
+        return;
+    }
+
+    const uint32_t elapsed_ticks = furi_get_tick() - app->last_interaction_tick;
+    const bool progress_active = app->progress_started_tick != 0U;
+    if(app->idle_exit_minutes > 0U && !progress_active &&
+       elapsed_ticks >= flippass_ms_to_ticks(flippass_minutes_to_ms(app->idle_exit_minutes))) {
+        FLIPPASS_LOG_EVENT(app, "IDLE_EXIT");
+        flippass_request_exit(app);
+        return;
+    }
+
+    const uint32_t current_scene = scene_manager_get_current_scene(app->scene_manager);
+    if(app->idle_lock_minutes > 0U &&
+       elapsed_ticks >= flippass_ms_to_ticks(flippass_minutes_to_ms(app->idle_lock_minutes)) &&
+       flippass_idle_lock_can_prompt(app, current_scene)) {
+        flippass_idle_request_lock(app);
+    }
 }
 
 void flippass_request_exit(App* app) {
@@ -1268,8 +1588,9 @@ void flippass_reset_database(App* app) {
     app->database_cipher        = FlipPassKdbxCipherAes256;
     app->database_compression   = KDBX_COMPRESSION_GZIP;
     app->database_kdf_rounds    = FLIPPASS_KDBX_DEFAULT_AES_KDF_ROUNDS;
-    memzero(app->database_save_key, sizeof(app->database_save_key));
-    app->database_save_key_ready = false;
+    flippass_session_clear_credentials(app);
+    app->idle_lock_active = false;
+    app->idle_lock_failed_attempts = 0U;
     app->browser_selected_index = 0;
     app->action_selected_index  = 0;
     app->other_field_selected_index = 0;
@@ -1347,6 +1668,9 @@ void flippass_save_settings(App* app) {
     FlipperFormat* file = flipper_format_file_alloc(storage);
     char last_open_count_text[16];
     char otp_time_zone_text[8];
+    char idle_lock_text[8];
+    char idle_attempts_text[8];
+    char idle_exit_text[8];
     FLIPPASS_MEMORY_LOG(app, "settings_format_alloc", sizeof(last_open_count_text));
 
     if(flipper_format_file_open_always(file, FLIPPASS_CONFIG_FILE_PATH)) {
@@ -1383,8 +1707,26 @@ void flippass_save_settings(App* app) {
             otp_time_zone_text,
             sizeof(otp_time_zone_text),
             "%ld",
-            (long)app->otp_time_zone_hours);
-        flipper_format_write_string_cstr(file, "otp_time_zone_hours", otp_time_zone_text);
+            (long)app->otp_time_zone_minutes);
+        flipper_format_write_string_cstr(file, "otp_time_zone_minutes", otp_time_zone_text);
+        snprintf(
+            idle_lock_text,
+            sizeof(idle_lock_text),
+            "%u",
+            (unsigned int)app->idle_lock_minutes);
+        flipper_format_write_string_cstr(file, "idle_lock_minutes", idle_lock_text);
+        snprintf(
+            idle_attempts_text,
+            sizeof(idle_attempts_text),
+            "%u",
+            (unsigned int)app->idle_unlock_attempts);
+        flipper_format_write_string_cstr(file, "idle_unlock_attempts", idle_attempts_text);
+        snprintf(
+            idle_exit_text,
+            sizeof(idle_exit_text),
+            "%u",
+            (unsigned int)app->idle_exit_minutes);
+        flipper_format_write_string_cstr(file, "idle_exit_minutes", idle_exit_text);
     }
 
     flipper_format_file_close(file);
@@ -1402,6 +1744,9 @@ static void flippass_load_settings(App* app) {
     FuriString* legacy_last_file_path = furi_string_alloc();
     FuriString* last_open_count = furi_string_alloc();
     FuriString* otp_time_zone = furi_string_alloc();
+    FuriString* idle_lock = furi_string_alloc();
+    FuriString* idle_attempts = furi_string_alloc();
+    FuriString* idle_exit = furi_string_alloc();
     bool stored_keyboard_layout_configured = false;
     bool has_keyboard_layout_configured = false;
     bool has_valid_keyboard_layout = false;
@@ -1411,7 +1756,10 @@ static void flippass_load_settings(App* app) {
     app->last_open_count = 0U;
     app->keyboard_layout_configured = false;
     furi_string_reset(app->keyboard_layout_path);
-    app->otp_time_zone_hours = 0;
+    app->otp_time_zone_minutes = 0;
+    app->idle_lock_minutes = FLIPPASS_DEFAULT_IDLE_LOCK_MINUTES;
+    app->idle_unlock_attempts = FLIPPASS_DEFAULT_IDLE_UNLOCK_ATTEMPTS;
+    app->idle_exit_minutes = FLIPPASS_DEFAULT_IDLE_EXIT_MINUTES;
 
     if(flipper_format_file_open_existing(file, FLIPPASS_CONFIG_FILE_PATH)) {
         flipper_format_rewind(file);
@@ -1457,12 +1805,58 @@ static void flippass_load_settings(App* app) {
         }
 
         flipper_format_rewind(file);
-        if(flipper_format_read_string(file, "otp_time_zone_hours", otp_time_zone) &&
+        if(flipper_format_read_string(file, "otp_time_zone_minutes", otp_time_zone) &&
            !furi_string_empty(otp_time_zone)) {
             char* parse_end = NULL;
             const long parsed = strtol(furi_string_get_cstr(otp_time_zone), &parse_end, 10);
-            if(parse_end != NULL && *parse_end == '\0' && parsed >= -12 && parsed <= 14) {
-                app->otp_time_zone_hours = (int8_t)parsed;
+            if(parse_end != NULL && *parse_end == '\0' &&
+               parsed >= FLIPPASS_OTP_TIME_ZONE_MIN_MINUTES &&
+               parsed <= FLIPPASS_OTP_TIME_ZONE_MAX_MINUTES &&
+               (parsed % FLIPPASS_OTP_TIME_ZONE_STEP_MINUTES) == 0) {
+                app->otp_time_zone_minutes = (int16_t)parsed;
+            }
+        } else {
+            flipper_format_rewind(file);
+            if(flipper_format_read_string(file, "otp_time_zone_hours", otp_time_zone) &&
+               !furi_string_empty(otp_time_zone)) {
+                char* parse_end = NULL;
+                const long parsed = strtol(furi_string_get_cstr(otp_time_zone), &parse_end, 10);
+                if(parse_end != NULL && *parse_end == '\0' && parsed >= -12 && parsed <= 14) {
+                    app->otp_time_zone_minutes = (int16_t)(parsed * 60);
+                }
+            }
+        }
+
+        flipper_format_rewind(file);
+        if(flipper_format_read_string(file, "idle_lock_minutes", idle_lock) &&
+           !furi_string_empty(idle_lock)) {
+            char* parse_end = NULL;
+            const unsigned long parsed =
+                strtoul(furi_string_get_cstr(idle_lock), &parse_end, 10);
+            if(parse_end != NULL && *parse_end == '\0' && parsed <= UINT16_MAX) {
+                app->idle_lock_minutes = (uint16_t)parsed;
+            }
+        }
+
+        flipper_format_rewind(file);
+        if(flipper_format_read_string(file, "idle_unlock_attempts", idle_attempts) &&
+           !furi_string_empty(idle_attempts)) {
+            char* parse_end = NULL;
+            const unsigned long parsed =
+                strtoul(furi_string_get_cstr(idle_attempts), &parse_end, 10);
+            if(parse_end != NULL && *parse_end == '\0' && parsed >= 1U && parsed <= UINT8_MAX) {
+                app->idle_unlock_attempts = (uint8_t)parsed;
+            }
+        }
+
+        flipper_format_rewind(file);
+        if(flipper_format_read_string(file, "idle_exit_minutes", idle_exit) &&
+           !furi_string_empty(idle_exit)) {
+            char* parse_end = NULL;
+            const unsigned long parsed =
+                strtoul(furi_string_get_cstr(idle_exit), &parse_end, 10);
+            if(parse_end != NULL && *parse_end == '\0' && parsed <= UINT16_MAX) {
+                app->idle_exit_minutes = (uint16_t)parsed;
             }
         }
     }
@@ -1491,6 +1885,9 @@ static void flippass_load_settings(App* app) {
     furi_string_free(legacy_last_file_path);
     furi_string_free(last_open_count);
     furi_string_free(otp_time_zone);
+    furi_string_free(idle_lock);
+    furi_string_free(idle_attempts);
+    furi_string_free(idle_exit);
 }
 
 #if FLIPPASS_ENABLE_DEBUG_CREATE_HOOK
@@ -1580,7 +1977,7 @@ static App* flippass_app_alloc(const char* args) {
     app->last_open_file_path = furi_string_alloc();
     app->last_open_count = 0U;
     app->keyboard_layout_configured = false;
-    app->otp_time_zone_hours = 0;
+    app->otp_time_zone_minutes = 0;
 
     app->text_input = text_input_alloc();
     view_dispatcher_add_view(
@@ -1629,8 +2026,7 @@ static App* flippass_app_alloc(const char* args) {
     app->database_cipher        = FlipPassKdbxCipherAes256;
     app->database_compression   = KDBX_COMPRESSION_GZIP;
     app->database_kdf_rounds    = FLIPPASS_KDBX_DEFAULT_AES_KDF_ROUNDS;
-    memzero(app->database_save_key, sizeof(app->database_save_key));
-    app->database_save_key_ready = false;
+    flippass_session_clear_credentials(app);
     app->text_view_body         = furi_string_alloc();
     app->usb_expect_rpc_session_close = false;
     app->browser_selected_index = 0;
@@ -1673,7 +2069,7 @@ static App* flippass_app_alloc(const char* args) {
     app->editor_otp_algorithm = FlipPassOtpAlgorithmSha1;
     app->editor_otp_digits = FLIPPASS_OTP_DEFAULT_DIGITS;
     app->editor_otp_period = FLIPPASS_OTP_DEFAULT_PERIOD;
-    app->editor_otp_time_zone_hours = 0;
+    app->editor_otp_time_zone_minutes = 0;
     app->editor_otp_settled = false;
     app->editor_otp_secret[0] = '\0';
     snprintf(
@@ -1691,6 +2087,13 @@ static App* flippass_app_alloc(const char* args) {
     app->password_gen_auto_open_field_name = false;
     app->editor_selected_index = 0U;
     app->editor_return_scene = FlipPassScene_FileBrowser;
+    app->editor_idle_lock_minutes = FLIPPASS_DEFAULT_IDLE_LOCK_MINUTES;
+    app->editor_idle_unlock_attempts = FLIPPASS_DEFAULT_IDLE_UNLOCK_ATTEMPTS;
+    app->editor_idle_exit_minutes = FLIPPASS_DEFAULT_IDLE_EXIT_MINUTES;
+    app->editor_keyboard_layout_index = 0U;
+    app->editor_keyboard_layout_use_alt = true;
+    app->editor_keyboard_layout_available = false;
+    app->editor_keyboard_layout_path[0] = '\0';
     app->browser_directory_selected_index = 0U;
     app->browser_menu_selected_index = 0U;
     app->editor_close_after_commit = false;
@@ -1699,6 +2102,11 @@ static App* flippass_app_alloc(const char* args) {
     app->typing_active = false;
     app->typing_cancel_requested = false;
     app->typing_cancel_back_tick = 0U;
+    app->idle_lock_active = false;
+    app->idle_lock_failed_attempts = 0U;
+    app->idle_lock_minutes = FLIPPASS_DEFAULT_IDLE_LOCK_MINUTES;
+    app->idle_unlock_attempts = FLIPPASS_DEFAULT_IDLE_UNLOCK_ATTEMPTS;
+    app->idle_exit_minutes = FLIPPASS_DEFAULT_IDLE_EXIT_MINUTES;
     flippass_update_last_interaction(app);
     flippass_module_loader_init(app);
     flippass_clear_text_buffer(app);

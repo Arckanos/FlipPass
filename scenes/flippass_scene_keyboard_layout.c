@@ -282,4 +282,6 @@ void flippass_scene_keyboard_layout_on_exit(void* context) {
 
     submenu_reset(app->submenu);
     flippass_keyboard_layout_unload_plugin(app);
+    flippass_output_release_all(app);
+    flippass_output_cleanup(app);
 }

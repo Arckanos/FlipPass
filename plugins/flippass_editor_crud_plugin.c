@@ -3,6 +3,7 @@
 #include "../kdbx/kdbx_constants.h"
 #include "../kdbx/memzero.h"
 #include "../scenes/flippass_scene.h"
+#include "../scenes/flippass_scene_editor.h"
 #include "../scenes/flippass_scene_other_fields.h"
 
 #include <storage/storage.h>
@@ -89,7 +90,7 @@ static void flippass_editor_crud_clear_context(App* app) {
     app->editor_otp_algorithm = FlipPassOtpAlgorithmSha1;
     app->editor_otp_digits = FLIPPASS_OTP_DEFAULT_DIGITS;
     app->editor_otp_period = FLIPPASS_OTP_DEFAULT_PERIOD;
-    app->editor_otp_time_zone_hours = 0;
+    app->editor_otp_time_zone_minutes = 0;
     app->editor_otp_settled = false;
     app->editor_otp_secret[0] = '\0';
     snprintf(
@@ -102,6 +103,13 @@ static void flippass_editor_crud_clear_context(App* app) {
     app->password_gen_auto_open_field_name = false;
     app->editor_selected_index = 0U;
     app->editor_return_scene = FlipPassScene_FileBrowser;
+    app->editor_idle_lock_minutes = app->idle_lock_minutes;
+    app->editor_idle_unlock_attempts = app->idle_unlock_attempts;
+    app->editor_idle_exit_minutes = app->idle_exit_minutes;
+    app->editor_keyboard_layout_index = 0U;
+    app->editor_keyboard_layout_use_alt = true;
+    app->editor_keyboard_layout_available = false;
+    app->editor_keyboard_layout_path[0] = '\0';
     app->editor_close_after_commit = false;
 }
 
@@ -288,7 +296,7 @@ static void flippass_editor_crud_restore_parent_mode(App* app) {
     app->editor_custom_field_draft = NULL;
     app->editor_text_target = FlipPassEditorTextTargetNone;
     app->password_gen_auto_open_field_name = false;
-    app->editor_selected_index = 6U;
+    app->editor_selected_index = FlipPassEditorEntryRowOtherFields;
 }
 
 static bool flippass_editor_crud_validate_host(

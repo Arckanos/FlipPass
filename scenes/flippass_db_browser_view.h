@@ -56,6 +56,7 @@ typedef enum {
     FlipPassDbBrowserEventOpenOther,
     FlipPassDbBrowserEventLongOk,
     FlipPassDbBrowserEventSelectAction,
+    FlipPassDbBrowserEventCloseActionMenu,
 } FlipPassDbBrowserEvent;
 
 typedef void (*FlipPassDbBrowserViewCallback)(FlipPassDbBrowserEvent event, void* context);

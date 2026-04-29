@@ -222,4 +222,6 @@ bool flippass_scene_other_field_actions_on_event(void* context, SceneManagerEven
 void flippass_scene_other_field_actions_on_exit(void* context) {
     App* app = context;
     dialog_ex_reset(app->dialog_ex);
+    flippass_output_release_all(app);
+    flippass_output_cleanup(app);
 }

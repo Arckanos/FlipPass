@@ -7,6 +7,19 @@ struct App;
 struct KDBXCustomField;
 struct FlipPassEditorCustomFieldDraft;
 
+typedef enum {
+    FlipPassEditorEntryRowTitle = 0U,
+    FlipPassEditorEntryRowUsername,
+    FlipPassEditorEntryRowPassword,
+    FlipPassEditorEntryRowUrl,
+    FlipPassEditorEntryRowNotes,
+    FlipPassEditorEntryRowAutotype,
+    FlipPassEditorEntryRowOtherFields,
+    FlipPassEditorEntryRowOtp,
+    FlipPassEditorEntryRowCommit,
+    FlipPassEditorEntryRowDelete,
+} FlipPassEditorEntryRow;
+
 void flippass_editor_clear_custom_field_drafts(struct App* app);
 size_t flippass_editor_custom_field_count(const struct App* app);
 void flippass_editor_prepare_new_custom_field(struct App* app);

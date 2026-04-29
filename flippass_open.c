@@ -2143,7 +2143,7 @@ bool flippass_open_execute(App* app, FuriString* error) {
     uint64_t resume_kdf_rounds = app->database_kdf_rounds;
     FlipPassKdbxCipher resume_cipher = app->database_cipher;
     uint32_t resume_compression = app->database_compression;
-    bool resume_save_key_ready = resume_from_staged_xml && app->database_save_key_ready;
+    bool resume_save_key_ready = false;
     bool ok = false;
     bool trace_capture_suspended = false;
 
@@ -2167,10 +2167,9 @@ bool flippass_open_execute(App* app, FuriString* error) {
     session->requested_backend = requested_backend;
     session->allow_ext_promotion = allow_ext_promotion;
     session->resume_from_staged_xml = resume_from_staged_xml;
-    if(resume_save_key_ready) {
-        memcpy(resume_save_key, app->database_save_key, sizeof(resume_save_key));
-    } else {
-        memzero(resume_save_key, sizeof(resume_save_key));
+    memzero(resume_save_key, sizeof(resume_save_key));
+    if(resume_from_staged_xml) {
+        resume_save_key_ready = flippass_session_copy_save_key(app, resume_save_key);
     }
 
     app->pending_gzip_scratch_vault = NULL;
@@ -2206,8 +2205,10 @@ bool flippass_open_execute(App* app, FuriString* error) {
         app->database_compression = resume_compression;
         app->database_kdf_rounds = resume_kdf_rounds;
         if(resume_save_key_ready) {
-            memcpy(app->database_save_key, resume_save_key, sizeof(app->database_save_key));
-            app->database_save_key_ready = true;
+            if(!flippass_session_store_save_key(app, resume_save_key)) {
+                furi_string_set_str(error, "Unable to protect the resumed database credential.");
+                goto cleanup;
+            }
         }
     }
     if(resume_from_staged_xml) {
@@ -2267,11 +2268,10 @@ bool flippass_open_execute(App* app, FuriString* error) {
                                        session->open_profile.kdf_rounds :
                                        FLIPPASS_KDBX_DEFAULT_AES_KDF_ROUNDS;
         if(session->open_profile.composite_key_ready) {
-            memcpy(
-                app->database_save_key,
-                session->open_profile.composite_key,
-                sizeof(app->database_save_key));
-            app->database_save_key_ready = true;
+            if(!flippass_session_store_save_key(app, session->open_profile.composite_key)) {
+                furi_string_set_str(error, "Unable to protect the database credential.");
+                goto cleanup;
+            }
         }
         flippass_module_unload(app, FlipPassModuleSlotOpenAcquire);
         acquire_plugin = NULL;
@@ -2448,24 +2448,19 @@ bool flippass_open_execute(App* app, FuriString* error) {
             app->database_kdf_rounds = session->open_profile.kdf_rounds != 0U ?
                                            session->open_profile.kdf_rounds :
                                            FLIPPASS_KDBX_DEFAULT_AES_KDF_ROUNDS;
-            if(session->open_profile.composite_key_ready) {
-                memcpy(
-                    app->database_save_key,
-                    session->open_profile.composite_key,
-                    sizeof(app->database_save_key));
-                app->database_save_key_ready = true;
+            if(session->open_profile.composite_key_ready && !app->database_save_key_ready) {
+                if(!flippass_session_store_save_key(app, session->open_profile.composite_key)) {
+                    furi_string_set_str(error, "Unable to protect the database credential.");
+                    ok = false;
+                    goto cleanup;
+                }
             }
         }
         app->database_dirty = false;
         app->database_new = false;
         if(app->editor_mode == FlipPassEditorModeModifyDatabase &&
-           app->editor_return_scene == FlipPassScene_FileBrowser &&
-           app->master_password[0] != '\0') {
-            snprintf(
-                app->editor_database_password,
-                sizeof(app->editor_database_password),
-                "%s",
-                app->master_password);
+           app->editor_return_scene == FlipPassScene_FileBrowser) {
+            app->editor_database_password[0] = '\0';
         }
         flippass_clear_master_password(app);
         flippass_progress_update(app, "Ready", "", 100U);
@@ -2494,8 +2489,7 @@ cleanup:
         flippass_system_log_capture_resume();
     }
     if(!ok && !app->pending_vault_fallback) {
-        memzero(app->database_save_key, sizeof(app->database_save_key));
-        app->database_save_key_ready = false;
+        flippass_session_clear_credentials(app);
         app->database_kdf_rounds = FLIPPASS_KDBX_DEFAULT_AES_KDF_ROUNDS;
         flippass_clear_master_password(app);
     }

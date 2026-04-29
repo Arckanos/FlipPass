@@ -199,6 +199,7 @@ static bool flippass_other_fields_open_editor_item(App* app) {
         flippass_other_fields_plugin_load(app, load_error);
     FlipPassOtherFieldsSelectionV1 selection = {0};
 
+    flippass_other_fields_sync_selection_from_view(app);
     if(plugin == NULL || !plugin->select(app->other_field_selected_index, &selection)) {
         furi_string_free(load_error);
         return false;
@@ -367,6 +368,9 @@ bool flippass_scene_other_fields_on_event(void* context, SceneManagerEvent event
     }
 
     if(event.type == SceneManagerEventTypeBack) {
+        if(mode == FlipPassOtherFieldsModeEdit || mode == FlipPassOtherFieldsModeEditNoAuto) {
+            app->editor_selected_index = FlipPassEditorEntryRowOtherFields;
+        }
         scene_manager_set_scene_state(
             app->scene_manager, FlipPassScene_OtherFields, FlipPassOtherFieldsModeType);
         scene_manager_previous_scene(app->scene_manager);
@@ -383,6 +387,8 @@ void flippass_scene_other_fields_on_exit(void* context) {
 
     flippass_other_fields_sync_selection_from_view(app);
     flippass_db_browser_view_set_action_menu_open(app->db_browser, false);
+    flippass_output_release_all(app);
+    flippass_output_cleanup(app);
     if(descriptor != NULL && descriptor->entry_point != NULL) {
         const FlipPassOtherFieldsPluginV1* plugin = descriptor->entry_point;
         plugin->release();

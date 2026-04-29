@@ -25,9 +25,9 @@ enum {
 };
 
 enum {
-    FlipPassFileBrowserMenuActionOpen = 0,
+    FlipPassFileBrowserMenuActionModify = 0,
+    FlipPassFileBrowserMenuActionConfig,
     FlipPassFileBrowserMenuActionRename,
-    FlipPassFileBrowserMenuActionModify,
     FlipPassFileBrowserMenuActionDelete,
 };
 
@@ -335,6 +335,30 @@ static void flippass_file_browser_prepare_modify(App* app) {
     flippass_clear_master_password(app);
 }
 
+static void flippass_file_browser_prepare_config(App* app) {
+    app->editor_mode = FlipPassEditorModeGlobalConfig;
+    app->editor_parent_mode = FlipPassEditorModeNone;
+    app->editor_text_target = FlipPassEditorTextTargetNone;
+    app->editor_group = NULL;
+    app->editor_entry = NULL;
+    app->editor_selected_index = 0U;
+    app->editor_return_scene = FlipPassScene_FileBrowser;
+    app->editor_close_after_commit = false;
+    app->editor_idle_lock_minutes = app->idle_lock_minutes;
+    app->editor_idle_unlock_attempts = app->idle_unlock_attempts;
+    app->editor_idle_exit_minutes = app->idle_exit_minutes;
+    app->editor_otp_time_zone_minutes = app->otp_time_zone_minutes;
+    app->editor_keyboard_layout_index = 0U;
+    app->editor_keyboard_layout_use_alt =
+        app->keyboard_layout_path == NULL || furi_string_empty(app->keyboard_layout_path);
+    app->editor_keyboard_layout_available = false;
+    snprintf(
+        app->editor_keyboard_layout_path,
+        sizeof(app->editor_keyboard_layout_path),
+        "%s",
+        app->editor_keyboard_layout_use_alt ? "" : furi_string_get_cstr(app->keyboard_layout_path));
+}
+
 static void flippass_file_browser_modify_selected(App* app) {
     FlipPassFileBrowserItem* item = flippass_file_browser_selected_item(app);
 
@@ -435,26 +459,21 @@ static void flippass_file_browser_handle_menu_action(App* app) {
         return;
     }
 
-    if(app->browser_menu_selected_index == FlipPassFileBrowserMenuActionOpen) {
-        app->editor_mode = FlipPassEditorModeNone;
-        app->editor_return_scene = FlipPassScene_FileBrowser;
-        app->editor_close_after_commit = false;
-        furi_string_set(app->file_path, app->pending_path);
-        flippass_clear_text_buffer(app);
-        flippass_clear_master_password(app);
+    if(app->browser_menu_selected_index == FlipPassFileBrowserMenuActionModify) {
+        flippass_file_browser_prepare_modify(app);
         scene_manager_next_scene(app->scene_manager, FlipPassScene_PasswordEntry);
+        return;
+    }
+
+    if(app->browser_menu_selected_index == FlipPassFileBrowserMenuActionConfig) {
+        flippass_file_browser_prepare_config(app);
+        scene_manager_next_scene(app->scene_manager, FlipPassScene_Editor);
         return;
     }
 
     if(app->browser_menu_selected_index == FlipPassFileBrowserMenuActionRename) {
         flippass_file_browser_prepare_rename(app);
         scene_manager_next_scene(app->scene_manager, FlipPassScene_Editor);
-        return;
-    }
-
-    if(app->browser_menu_selected_index == FlipPassFileBrowserMenuActionModify) {
-        flippass_file_browser_prepare_modify(app);
-        scene_manager_next_scene(app->scene_manager, FlipPassScene_PasswordEntry);
         return;
     }
 

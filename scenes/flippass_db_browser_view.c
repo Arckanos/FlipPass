@@ -50,9 +50,9 @@ static const char* flippass_db_browser_action_labels[FlipPassDbBrowserActionCoun
 };
 
 static const char* flippass_db_browser_file_action_labels[] = {
-    "Open",
-    "Rename",
     "Modify",
+    "Config",
+    "Rename",
     "Delete",
 };
 
@@ -451,6 +451,7 @@ static bool flippass_db_browser_view_input_callback(InputEvent* event, void* con
                     FlipPassDbBrowserViewModel * mutable_model,
                     { mutable_model->action_menu_open = false; },
                     true);
+                flippass_db_browser_view_emit(browser, FlipPassDbBrowserEventCloseActionMenu);
                 return true;
             }
 
@@ -491,6 +492,7 @@ static bool flippass_db_browser_view_input_callback(InputEvent* event, void* con
                 FlipPassDbBrowserViewModel * mutable_model,
                 { mutable_model->action_menu_open = false; },
                 true);
+            flippass_db_browser_view_emit(browser, FlipPassDbBrowserEventCloseActionMenu);
             consumed = true;
             break;
         default:

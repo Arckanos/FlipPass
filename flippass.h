@@ -48,6 +48,17 @@
 #define FLIPPASS_BADUSB_SETTINGS_FILE_PATH EXT_PATH("badusb/.badusb.settings")
 #define FLIPPASS_BADUSB_SETTINGS_DEFAULT_LAYOUT FLIPPASS_BADUSB_LAYOUT_DIR "/en-US.kl"
 #define FLIPPASS_KEYBOARD_LAYOUT_ALT   "alt-numpad"
+#define FLIPPASS_KEYBOARD_LAYOUT_PATH_SIZE 96U
+#define FLIPPASS_DEFAULT_IDLE_LOCK_MINUTES 3U
+#define FLIPPASS_DEFAULT_IDLE_EXIT_MINUTES 15U
+#define FLIPPASS_DEFAULT_IDLE_UNLOCK_ATTEMPTS 5U
+#define FLIPPASS_OTP_TIME_ZONE_MIN_MINUTES (-12 * 60)
+#define FLIPPASS_OTP_TIME_ZONE_MAX_MINUTES (14 * 60)
+#define FLIPPASS_OTP_TIME_ZONE_STEP_MINUTES 30
+#define FLIPPASS_OTP_TIME_ZONE_COUNT \
+    (((FLIPPASS_OTP_TIME_ZONE_MAX_MINUTES - FLIPPASS_OTP_TIME_ZONE_MIN_MINUTES) / \
+      FLIPPASS_OTP_TIME_ZONE_STEP_MINUTES) + \
+     1)
 #define FLIPPASS_USB_ENUMERATION_TIMEOUT_MS 15000U
 #define FLIPPASS_USB_ENUMERATION_GRACE_MS   5000U
 #define FLIPPASS_USB_PREPARE_RETRY_COUNT    3U
@@ -70,6 +81,8 @@
 #define FLIPPASS_SYSTEM_LOG_RING_LINE_SIZE 128
 #define FLIPPASS_SECURE_VALUE_NONCE_SIZE 16U
 #define FLIPPASS_SECURE_VALUE_MAC_SIZE   32U
+#define FLIPPASS_SESSION_SECRET_SIZE     32U
+#define FLIPPASS_SESSION_WRAP_IV_SIZE    16U
 #define FLIPPASS_FORM_VALUE_SIZE         256U
 #define FLIPPASS_FILE_NAME_SIZE          64U
 #define FLIPPASS_KDBX_DEFAULT_AES_KDF_ROUNDS 600000ULL
@@ -171,6 +184,7 @@ typedef enum {
     FlipPassEditorModeRenameFile,
     FlipPassEditorModeAddCustomField,
     FlipPassEditorModeEditCustomField,
+    FlipPassEditorModeGlobalConfig,
 } FlipPassEditorMode;
 
 typedef enum {
@@ -219,6 +233,11 @@ typedef struct {
     volatile uint32_t typing_cancel_back_tick; /**< Tick when Back canceled typing so one immediate navigation Back can be suppressed. */
     DateTime last_interaction_datetime; /**< Most recent wall-clock user interaction captured by the app. */
     uint32_t last_interaction_tick; /**< Monotonic tick captured alongside the last interaction wall clock. */
+    bool idle_lock_active; /**< True while an idle re-auth prompt is blocking the unlocked session. */
+    uint8_t idle_lock_failed_attempts; /**< Failed password attempts during the current idle lock. */
+    uint16_t idle_lock_minutes; /**< Inactivity minutes before Unlock Session, or 0 to disable. */
+    uint8_t idle_unlock_attempts; /**< Failed Unlock Session attempts before closing the session. */
+    uint16_t idle_exit_minutes; /**< Inactivity minutes before app exit, or 0 to disable. */
 #if FLIPPASS_ENABLE_SYSTEM_TRACE_CAPTURE_EFFECTIVE
     FuriLogHandler system_log_handler; /**< Optional filtered system-log capture for debug sessions. */
     bool system_log_capture_enabled; /**< True while the filtered system-log handler is registered. */
@@ -253,8 +272,12 @@ typedef struct {
     FlipPassKdbxCipher database_cipher; /**< Outer cipher used for the next save. */
     uint32_t database_compression; /**< Compression policy used for the next save. */
     uint64_t database_kdf_rounds; /**< AES-KDF rounds used for the next save. */
-    uint8_t database_save_key[32]; /**< Composite KDBX credential kept for passwordless session saves. */
-    bool database_save_key_ready; /**< True when database_save_key is valid for the unlocked session. */
+    uint8_t session_key_iv[FLIPPASS_SESSION_WRAP_IV_SIZE]; /**< IV for the enclave-wrapped ephemeral session key. */
+    uint8_t session_key_cipher[FLIPPASS_SESSION_SECRET_SIZE]; /**< Ephemeral session key encrypted with enclave slot 11. */
+    uint8_t database_save_key_nonce[FLIPPASS_SECURE_VALUE_NONCE_SIZE]; /**< Nonce for the session-sealed KDBX credential. */
+    uint8_t database_save_key_cipher[FLIPPASS_SESSION_SECRET_SIZE]; /**< Composite KDBX credential sealed by the session key. */
+    uint8_t database_save_key_mac[FLIPPASS_SECURE_VALUE_MAC_SIZE]; /**< MAC for the sealed KDBX credential. */
+    bool database_save_key_ready; /**< True when the sealed database credential can be unwrapped. */
     bool parse_failed; /**< True once XML or data-model parsing hits a handled failure. */
     bool database_loaded; /**< True if the current database was parsed successfully. */
     bool database_dirty; /**< True once the unlocked session diverges from disk. */
@@ -275,7 +298,7 @@ typedef struct {
     FuriString* last_open_file_path; /**< Last successfully opened database path persisted in settings. */
     uint32_t last_open_count; /**< Successful open count for the persisted last-open path. */
     bool keyboard_layout_configured; /**< True once FlipPass owns a persisted layout choice. */
-    int8_t otp_time_zone_hours; /**< Global UTC correction, in hours, applied to TIMEOTP. */
+    int16_t otp_time_zone_minutes; /**< Global UTC correction, in minutes, applied to TIMEOTP. */
     TextInput* text_input; /**< Pointer to the TextInput instance. */
     char text_buffer[TEXT_BUFFER_SIZE]; /**< Buffer for text input. */
     char password_header[FLIPPASS_PASSWORD_HEADER_SIZE]; /**< Persistent password-entry header text. */
@@ -314,6 +337,13 @@ typedef struct {
     KDBXEntry* editor_entry; /**< Entry currently edited. */
     uint32_t editor_selected_index; /**< Last selected row in the shared editor scene. */
     uint32_t editor_return_scene; /**< Scene restored when the shared editor is canceled. */
+    uint16_t editor_idle_lock_minutes; /**< Draft global inactivity-lock timeout. */
+    uint8_t editor_idle_unlock_attempts; /**< Draft Unlock Session attempt limit. */
+    uint16_t editor_idle_exit_minutes; /**< Draft global inactivity-exit timeout. */
+    uint32_t editor_keyboard_layout_index; /**< Draft keyboard-layout item index. */
+    bool editor_keyboard_layout_use_alt; /**< Draft keyboard layout uses Alt+NumPad. */
+    bool editor_keyboard_layout_available; /**< True when config loaded layout choices. */
+    char editor_keyboard_layout_path[FLIPPASS_KEYBOARD_LAYOUT_PATH_SIZE]; /**< Draft layout path. */
     uint32_t browser_directory_selected_index; /**< Last selected row in the custom file browser. */
     uint32_t browser_menu_selected_index; /**< Last selected database file menu action. */
     bool editor_close_after_commit; /**< True when a successful editor commit should close the current database. */
@@ -337,7 +367,7 @@ typedef struct {
     FlipPassOtpAlgorithm editor_otp_algorithm; /**< Current TIMEOTP algorithm. */
     uint8_t editor_otp_digits; /**< Current TIMEOTP digit count. */
     uint32_t editor_otp_period; /**< Current TIMEOTP period in seconds. */
-    int8_t editor_otp_time_zone_hours; /**< Draft global TIMEOTP UTC correction. */
+    int16_t editor_otp_time_zone_minutes; /**< Draft global TIMEOTP UTC correction in minutes. */
     bool editor_otp_settled; /**< True when the edited entry already has an OTP cluster. */
     char editor_otp_secret[FLIPPASS_FORM_VALUE_SIZE]; /**< OTP secret editor buffer. */
     char editor_otp_counter[FLIPPASS_OTP_COUNTER_TEXT_SIZE]; /**< HMACOTP counter editor buffer. */
@@ -390,6 +420,11 @@ typedef struct App {
             volatile uint32_t typing_cancel_back_tick;
             DateTime last_interaction_datetime;
             uint32_t last_interaction_tick;
+            bool idle_lock_active;
+            uint8_t idle_lock_failed_attempts;
+            uint16_t idle_lock_minutes;
+            uint8_t idle_unlock_attempts;
+            uint16_t idle_exit_minutes;
 #if FLIPPASS_ENABLE_SYSTEM_TRACE_CAPTURE_EFFECTIVE
             FuriLogHandler system_log_handler;
             bool system_log_capture_enabled;
@@ -423,7 +458,11 @@ typedef struct App {
             FlipPassKdbxCipher database_cipher;
             uint32_t database_compression;
             uint64_t database_kdf_rounds;
-            uint8_t database_save_key[32];
+            uint8_t session_key_iv[FLIPPASS_SESSION_WRAP_IV_SIZE];
+            uint8_t session_key_cipher[FLIPPASS_SESSION_SECRET_SIZE];
+            uint8_t database_save_key_nonce[FLIPPASS_SECURE_VALUE_NONCE_SIZE];
+            uint8_t database_save_key_cipher[FLIPPASS_SESSION_SECRET_SIZE];
+            uint8_t database_save_key_mac[FLIPPASS_SECURE_VALUE_MAC_SIZE];
             bool database_save_key_ready;
             bool parse_failed;
             bool database_loaded;
@@ -444,7 +483,7 @@ typedef struct App {
             FuriString* last_open_file_path;
             uint32_t last_open_count;
             bool keyboard_layout_configured;
-            int8_t otp_time_zone_hours;
+            int16_t otp_time_zone_minutes;
             TextInput* text_input;
             char text_buffer[TEXT_BUFFER_SIZE];
             char password_header[FLIPPASS_PASSWORD_HEADER_SIZE];
@@ -483,6 +522,13 @@ typedef struct App {
             KDBXEntry* editor_entry;
             uint32_t editor_selected_index;
             uint32_t editor_return_scene;
+            uint16_t editor_idle_lock_minutes;
+            uint8_t editor_idle_unlock_attempts;
+            uint16_t editor_idle_exit_minutes;
+            uint32_t editor_keyboard_layout_index;
+            bool editor_keyboard_layout_use_alt;
+            bool editor_keyboard_layout_available;
+            char editor_keyboard_layout_path[FLIPPASS_KEYBOARD_LAYOUT_PATH_SIZE];
             uint32_t browser_directory_selected_index;
             uint32_t browser_menu_selected_index;
             bool editor_close_after_commit;
@@ -506,7 +552,7 @@ typedef struct App {
             FlipPassOtpAlgorithm editor_otp_algorithm;
             uint8_t editor_otp_digits;
             uint32_t editor_otp_period;
-            int8_t editor_otp_time_zone_hours;
+            int16_t editor_otp_time_zone_minutes;
             bool editor_otp_settled;
             char editor_otp_secret[FLIPPASS_FORM_VALUE_SIZE];
             char editor_otp_counter[FLIPPASS_OTP_COUNTER_TEXT_SIZE];
@@ -582,6 +628,11 @@ typedef enum {
 void flippass_save_settings(App* app);
 void flippass_clear_text_buffer(App* app);
 void flippass_clear_master_password(App* app);
+void flippass_make_password_composite_key(const char* password, uint8_t out_key[32]);
+void flippass_session_clear_credentials(App* app);
+bool flippass_session_store_save_key(App* app, const uint8_t save_key[32]);
+bool flippass_session_copy_save_key(App* app, uint8_t out_key[32]);
+bool flippass_session_verify_password(App* app, const char* password);
 void flippass_reset_database(App* app);
 void flippass_close_database(App* app);
 void flippass_set_status(App* app, const char* title, const char* message);
@@ -708,6 +759,7 @@ bool flippass_output_type_autotype(
     const KDBXEntry* entry);
 void flippass_output_release_all(App* app);
 bool flippass_output_bluetooth_is_connected(const App* app);
+bool flippass_output_usb_is_connected(const App* app);
 bool flippass_output_bluetooth_is_advertising(const App* app);
 bool flippass_output_bluetooth_advertise(App* app);
 bool flippass_output_prewarm_transport(App* app, FlipPassOutputTransport transport);

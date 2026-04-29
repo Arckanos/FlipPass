@@ -2,7 +2,6 @@
 #include "flippass_db.h"
 #include "kdbx/kdbx_constants.h"
 #include "kdbx/memzero.h"
-#include "kdbx/sha2.h"
 #include "plugins/flippass_save_plugin.h"
 
 #include <storage/storage.h>
@@ -20,17 +19,6 @@ static uint64_t flippass_save_normalize_kdf_rounds(uint64_t rounds) {
     }
 
     return rounds;
-}
-
-static void flippass_save_make_composite_key(const char* password, uint8_t out_key[32]) {
-    uint8_t password_hash[32];
-
-    furi_assert(password);
-    furi_assert(out_key);
-
-    sha256_Raw((const uint8_t*)password, strlen(password), password_hash);
-    sha256_Raw(password_hash, sizeof(password_hash), out_key);
-    memzero(password_hash, sizeof(password_hash));
 }
 
 static void flippass_save_host_progress(
@@ -184,10 +172,8 @@ bool flippass_save_execute(
 
     kdf_rounds = flippass_save_normalize_kdf_rounds(kdf_rounds);
     if(password != NULL && password[0] != '\0') {
-        flippass_save_make_composite_key(password, save_key);
-    } else if(app->database_save_key_ready) {
-        memcpy(save_key, app->database_save_key, sizeof(save_key));
-    } else {
+        flippass_make_password_composite_key(password, save_key);
+    } else if(!flippass_session_copy_save_key(app, save_key)) {
         furi_string_set_str(error, "A save password is required.");
         goto cleanup;
     }
@@ -316,8 +302,12 @@ bool flippass_save_execute(
     flippass_module_unload(app, FlipPassModuleSlotSaveWriter);
 
     if(ok) {
-        memcpy(app->database_save_key, save_key, sizeof(app->database_save_key));
-        app->database_save_key_ready = true;
+        if(!flippass_session_store_save_key(app, save_key)) {
+            furi_string_set_str(
+                error, "The database was saved, but the session credential could not be protected.");
+            ok = false;
+            goto cleanup;
+        }
         memzero(save_key, sizeof(save_key));
         furi_string_set_str(app->file_path, target_path);
         app->database_cipher = cipher;

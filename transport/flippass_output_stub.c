@@ -74,6 +74,11 @@ bool flippass_output_bluetooth_is_connected(const App* app) {
     return false;
 }
 
+bool flippass_output_usb_is_connected(const App* app) {
+    UNUSED(app);
+    return false;
+}
+
 bool flippass_output_bluetooth_is_advertising(const App* app) {
     UNUSED(app);
     return false;

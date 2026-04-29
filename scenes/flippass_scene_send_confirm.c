@@ -196,11 +196,24 @@ void flippass_entry_action_prepare_type_menu(App* app) {
 
     FLIPPASS_MEMORY_LOG(app, "type_menu_prewarm_begin", FLIPPASS_TYPE_LOAD_HEAP_RESERVE_BYTES);
     flippass_output_release_all(app);
-    if(!flippass_output_bluetooth_is_connected(app)) {
+
+    flippass_output_prewarm_transport(app, FlipPassOutputTransportUsb);
+    if(flippass_output_usb_is_connected(app)) {
+        flippass_output_cleanup_transport(app, FlipPassOutputTransportBluetooth);
+    } else if(!flippass_output_bluetooth_is_connected(app)) {
         flippass_output_prewarm_transport(app, FlipPassOutputTransportBluetooth);
     }
-    flippass_output_prewarm_transport(app, FlipPassOutputTransportUsb);
+
     FLIPPASS_MEMORY_LOG(app, "type_menu_prewarm_end", FLIPPASS_TYPE_LOAD_HEAP_RESERVE_BYTES);
+}
+
+void flippass_entry_action_cleanup_type_menu(App* app) {
+    furi_assert(app);
+
+    FLIPPASS_MEMORY_LOG(app, "type_menu_cleanup_begin", FLIPPASS_TYPE_LOAD_HEAP_RESERVE_BYTES);
+    flippass_output_release_all(app);
+    flippass_output_cleanup(app);
+    FLIPPASS_MEMORY_LOG(app, "type_menu_cleanup_end", FLIPPASS_TYPE_LOAD_HEAP_RESERVE_BYTES);
 }
 
 bool flippass_entry_action_execute_pending(App* app, FuriString* error) {
