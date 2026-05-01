@@ -9,6 +9,10 @@
 #define KDBX_PROTECTED_ENABLE_KEY_DERIVE 1
 #endif
 
+#ifndef KDBX_PROTECTED_ENABLE_SALSA20
+#define KDBX_PROTECTED_ENABLE_SALSA20 1
+#endif
+
 #define KDBX_PROTECTED_CHACHA_BLOCK_SIZE 64U
 #define KDBX_PROTECTED_SALSA_BLOCK_SIZE  64U
 
@@ -452,6 +456,7 @@ static void kdbx_chacha20_generate_block(KDBXProtectedStream* stream) {
     memzero(working, sizeof(working));
 }
 
+#if KDBX_PROTECTED_ENABLE_SALSA20
 static void kdbx_salsa20_generate_block(KDBXProtectedStream* stream) {
     uint32_t working[16];
 
@@ -495,6 +500,7 @@ static void kdbx_salsa20_generate_block(KDBXProtectedStream* stream) {
     stream->block_offset = 0U;
     memzero(working, sizeof(working));
 }
+#endif
 
 void kdbx_protected_stream_reset(KDBXProtectedStream* stream) {
     if(stream == NULL) {
@@ -539,6 +545,7 @@ bool kdbx_protected_stream_init_prederived(
     }
 
     if(algorithm == KDBXProtectedStreamSalsa20) {
+#if KDBX_PROTECTED_ENABLE_SALSA20
         static const uint32_t sigma[4] = {0x61707865U, 0x3320646EU, 0x79622D32U, 0x6B206574U};
         static const uint8_t nonce[8] = {0xE8U, 0x30U, 0x09U, 0x4BU, 0x97U, 0x20U, 0x5DU, 0x2AU};
 
@@ -566,6 +573,11 @@ bool kdbx_protected_stream_init_prederived(
         stream->state.salsa20.state[14] = kdbx_read_u32_le(&material[28]);
         stream->state.salsa20.state[15] = sigma[3];
         return true;
+#else
+        UNUSED(material);
+        UNUSED(material_size);
+        return false;
+#endif
     }
 
     return false;
@@ -628,9 +640,13 @@ bool kdbx_protected_stream_apply(
         if(stream->block_offset >= sizeof(stream->block)) {
             if(stream->algorithm == KDBXProtectedStreamChaCha20) {
                 kdbx_chacha20_generate_block(stream);
-            } else if(stream->algorithm == KDBXProtectedStreamSalsa20) {
+            }
+#if KDBX_PROTECTED_ENABLE_SALSA20
+            else if(stream->algorithm == KDBXProtectedStreamSalsa20) {
                 kdbx_salsa20_generate_block(stream);
-            } else {
+            }
+#endif
+            else {
                 return false;
             }
         }

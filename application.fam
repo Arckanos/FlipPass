@@ -35,6 +35,7 @@ enable_bluetooth_output = flippass_build_flag("FLIPPASS_BUILD_ENABLE_BLUETOOTH_O
 enable_keyboard_layout = flippass_build_flag("FLIPPASS_BUILD_ENABLE_KEYBOARD_LAYOUT", 1)
 enable_debug_unlock_hook = flippass_build_flag("FLIPPASS_BUILD_ENABLE_DEBUG_UNLOCK_HOOK", 0)
 enable_debug_create_hook = flippass_build_flag("FLIPPASS_BUILD_ENABLE_DEBUG_CREATE_HOOK", 0)
+enable_debug_save_hook = flippass_build_flag("FLIPPASS_BUILD_ENABLE_DEBUG_SAVE_HOOK", 0)
 enable_app_rpc = flippass_build_flag("FLIPPASS_BUILD_ENABLE_APP_RPC", 0)
 stack_size_kib = flippass_build_int("FLIPPASS_BUILD_STACK_SIZE_KIB", 8)
 
@@ -54,6 +55,7 @@ common_cdefines = [
     f"FLIPPASS_ENABLE_KEYBOARD_LAYOUT={enable_keyboard_layout}",
     f"FLIPPASS_ENABLE_DEBUG_UNLOCK_HOOK={enable_debug_unlock_hook}",
     f"FLIPPASS_ENABLE_DEBUG_CREATE_HOOK={enable_debug_create_hook}",
+    f"FLIPPASS_ENABLE_DEBUG_SAVE_HOOK={enable_debug_save_hook}",
     f"FLIPPASS_ENABLE_APP_RPC={enable_app_rpc}",
 ]
 
@@ -69,7 +71,7 @@ App(
     requires=[
         "gui",
     ],
-    cdefines=common_cdefines,
+    cdefines=common_cdefines + ["KDBX_PROTECTED_ENABLE_SALSA20=0"],
     fap_icon="icons/icon.png",
     fap_icon_assets="icons",
     fap_category="Tools",
@@ -180,7 +182,8 @@ App(
     entry_point="flippass_open_stream_plugin_ep",
     requires=["flippass"],
     fal_embedded=True,
-    cdefines=common_cdefines,
+    cdefines=common_cdefines
+    + ["KDBX_PROTECTED_ENABLE_KEY_DERIVE=0", "KDBX_PROTECTED_ENABLE_SALSA20=0"],
     sources=[
         "plugins/flippass_open_stream_plugin.c",
         "kdbx/kdbx_open_profile.c",
@@ -271,7 +274,8 @@ App(
     entry_point="flippass_save_plugin_ep",
     requires=["flippass"],
     fal_embedded=True,
-    cdefines=common_cdefines,
+    cdefines=common_cdefines
+    + ["KDBX_PROTECTED_ENABLE_KEY_DERIVE=0", "KDBX_PROTECTED_ENABLE_SALSA20=0"],
     sources=[
         "plugins/flippass_save_plugin.c",
         "kdbx/kdbx_protected.c",

@@ -155,11 +155,13 @@ static void flippass_editor_clear_context(App* app) {
     app->editor_idle_lock_minutes = app->idle_lock_minutes;
     app->editor_idle_unlock_attempts = app->idle_unlock_attempts;
     app->editor_idle_exit_minutes = app->idle_exit_minutes;
+    app->editor_always_allow_ext = app->always_allow_ext;
     app->editor_keyboard_layout_index = 0U;
     app->editor_keyboard_layout_use_alt = true;
     app->editor_keyboard_layout_available = false;
     app->editor_keyboard_layout_path[0] = '\0';
     app->editor_close_after_commit = false;
+    memzero(app->editor_database_password, sizeof(app->editor_database_password));
 }
 
 static const char* flippass_editor_commit_label(const App* app) {
@@ -296,7 +298,7 @@ static uint32_t flippass_editor_commit_index(const App* app) {
     case FlipPassEditorModeEditCustomField:
         return 3U;
     case FlipPassEditorModeGlobalConfig:
-        return 5U;
+        return 6U;
     case FlipPassEditorModeNone:
     default:
         return 0U;
@@ -701,6 +703,14 @@ static void flippass_editor_config_attempts_change_callback(VariableItem* item) 
     variable_item_set_current_value_text(item, text);
 }
 
+static void flippass_editor_config_allow_ext_change_callback(VariableItem* item) {
+    App* app = variable_item_get_context(item);
+    const uint8_t index = variable_item_get_current_value_index(item);
+
+    app->editor_always_allow_ext = index != 0U;
+    variable_item_set_current_value_text(item, app->editor_always_allow_ext ? "Yes" : "No");
+}
+
 static const char* flippass_editor_config_layout_get_current_path(void* host_context) {
     App* app = host_context;
     if(app == NULL || app->editor_keyboard_layout_use_alt ||
@@ -864,6 +874,15 @@ static void flippass_editor_add_config_items(App* app) {
     variable_item_set_current_value_index(
         item, flippass_editor_otp_time_zone_to_index(app->editor_otp_time_zone_minutes));
     flippass_editor_otp_time_zone_change_callback(item);
+
+    item = variable_item_list_add(
+        app->variable_item_list,
+        "Allow /ext",
+        2U,
+        flippass_editor_config_allow_ext_change_callback,
+        app);
+    variable_item_set_current_value_index(item, app->editor_always_allow_ext ? 1U : 0U);
+    flippass_editor_config_allow_ext_change_callback(item);
 
     FuriString* error = furi_string_alloc();
     app->editor_keyboard_layout_available = false;
@@ -1053,9 +1072,12 @@ static bool flippass_editor_database_password_validator(
     const char* text,
     FuriString* error,
     void* context) {
-    UNUSED(context);
+    App* app = context;
 
     if(text == NULL || text[0] == '\0') {
+        if(app != NULL && flippass_editor_modify_database_uses_password(app)) {
+            return true;
+        }
         furi_string_set_str(error, "Password is required to save.");
         return false;
     }
@@ -1655,23 +1677,7 @@ static bool flippass_editor_save_database(
     const char* target_path,
     const char* password,
     FuriString* error) {
-    FLIPPASS_LOG_EVENT(
-        app,
-        "SAVE_REQUEST cipher=%lu compression=%lu kdf_rounds=%lu",
-        (unsigned long)app->database_cipher,
-        (unsigned long)app->database_compression,
-        (unsigned long)app->database_kdf_rounds);
-    view_dispatcher_switch_to_view(app->view_dispatcher, AppViewLoading);
-    const bool ok = flippass_save_execute(
-        app,
-        target_path,
-        password,
-        app->database_cipher,
-        app->database_compression,
-        app->database_kdf_rounds,
-        error);
-    flippass_progress_reset(app);
-    return ok;
+    return flippass_save_current_database(app, target_path, password, error);
 }
 
 static bool flippass_editor_execute_new_database_commit(App* app) {
@@ -1791,6 +1797,7 @@ static bool flippass_editor_execute_global_config_commit(App* app) {
     app->idle_unlock_attempts = app->editor_idle_unlock_attempts;
     app->idle_exit_minutes = app->editor_idle_exit_minutes;
     app->otp_time_zone_minutes = app->editor_otp_time_zone_minutes;
+    app->always_allow_ext = app->editor_always_allow_ext;
 
     if(app->editor_keyboard_layout_available) {
         if(app->editor_keyboard_layout_use_alt || app->editor_keyboard_layout_path[0] == '\0') {
@@ -2303,6 +2310,13 @@ static bool flippass_editor_text_target_can_generate_password(const App* app) {
                             app->editor_custom_field_protected));
 }
 
+static bool flippass_editor_text_target_select_default(const App* app) {
+    return app != NULL && app->editor_mode == FlipPassEditorModeModifyDatabase &&
+           app->editor_return_scene == FlipPassScene_FileBrowser &&
+           app->editor_text_target == FlipPassEditorTextTargetDatabasePassword &&
+           app->editor_database_password[0] != '\0';
+}
+
 static FlipPassPasswordGenTarget flippass_editor_password_gen_target(const App* app) {
     if(app == NULL) {
         return FlipPassPasswordGenTargetNone;
@@ -2429,7 +2443,12 @@ void flippass_scene_editor_text_input_on_enter(void* context) {
     text_input_set_header_text(
         app->text_input, flippass_editor_text_header(app, app->editor_text_target));
     text_input_set_result_callback(
-        app->text_input, flippass_editor_text_input_done, app, buffer, buffer_size, false);
+        app->text_input,
+        flippass_editor_text_input_done,
+        app,
+        buffer,
+        buffer_size,
+        flippass_editor_text_target_select_default(app));
     if(flippass_editor_text_target_can_generate_password(app)) {
         text_input_set_minimum_length(app->text_input, 0U);
     }

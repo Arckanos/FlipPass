@@ -255,6 +255,29 @@ static bool flippass_browser_confirm_close_database(App* app) {
         app->scene_manager, FlipPassScene_FileBrowser);
 }
 
+static bool flippass_browser_save_and_close_database(App* app) {
+    FuriString* error = furi_string_alloc();
+    bool ok = false;
+
+    furi_assert(app);
+
+    flippass_browser_hide_dialog(app, false);
+    ok = flippass_save_current_database(app, furi_string_get_cstr(app->file_path), NULL, error);
+    if(ok) {
+        flippass_close_database(app);
+        scene_manager_search_and_switch_to_previous_scene(
+            app->scene_manager, FlipPassScene_FileBrowser);
+    } else {
+        const char* detail = !furi_string_empty(error) ? furi_string_get_cstr(error) :
+                                                         "The database could not be saved.";
+        flippass_scene_status_show(app, "Save Failed", detail, FlipPassScene_DbEntries);
+        scene_manager_next_scene(app->scene_manager, FlipPassScene_Status);
+    }
+
+    furi_string_free(error);
+    return true;
+}
+
 static void flippass_browser_open_create_menu(App* app) {
     furi_assert(app);
 
@@ -341,18 +364,6 @@ static bool flippass_browser_prepare_entry_editor(
         "%s",
         source != NULL && source->autotype_sequence != NULL ? source->autotype_sequence : "");
     return true;
-}
-
-static void flippass_browser_prepare_save_editor(App* app, bool close_after_commit) {
-    app->editor_mode = FlipPassEditorModeModifyDatabase;
-    app->editor_parent_mode = FlipPassEditorModeNone;
-    app->editor_text_target = FlipPassEditorTextTargetNone;
-    app->editor_group = NULL;
-    app->editor_entry = NULL;
-    app->editor_selected_index = 3U;
-    app->editor_return_scene = FlipPassScene_DbEntries;
-    app->editor_close_after_commit = close_after_commit;
-    app->editor_database_password[0] = '\0';
 }
 
 static FlipPassEntryAction
@@ -803,10 +814,7 @@ bool flippass_scene_db_entries_on_event(void* context, SceneManagerEvent event) 
                 }
 
                 if(app->database_dirty && event.event == DialogExResultRight) {
-                    flippass_browser_hide_dialog(app, false);
-                    flippass_browser_prepare_save_editor(app, true);
-                    scene_manager_next_scene(app->scene_manager, FlipPassScene_Editor);
-                    return true;
+                    return flippass_browser_save_and_close_database(app);
                 }
 
                 if(!app->database_dirty && event.event == DialogExResultRight) {
@@ -828,6 +836,19 @@ bool flippass_scene_db_entries_on_event(void* context, SceneManagerEvent event) 
                 if(app->current_group == NULL) {
                     app->current_group = app->root_group;
                 }
+#if FLIPPASS_ENABLE_DEBUG_SAVE_HOOK
+                if(!flippass_debug_save_after_open(app, error)) {
+                    flippass_progress_reset(app);
+                    flippass_scene_status_show(
+                        app,
+                        "Debug Save Failed",
+                        furi_string_get_cstr(error),
+                        FlipPassScene_FileBrowser);
+                    scene_manager_next_scene(app->scene_manager, FlipPassScene_Status);
+                    furi_string_free(error);
+                    return true;
+                }
+#endif
                 flippass_progress_reset(app);
                 if(app->editor_mode == FlipPassEditorModeModifyDatabase &&
                    app->editor_return_scene == FlipPassScene_FileBrowser) {
