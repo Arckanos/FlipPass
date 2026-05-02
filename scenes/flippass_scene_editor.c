@@ -2364,6 +2364,13 @@ void flippass_scene_editor_on_enter(void* context) {
     scene_manager_set_scene_state(
         app->scene_manager, FlipPassScene_Editor, FlipPassEditorDialogNone);
     flippass_editor_build_form(app);
+    if((app->editor_mode == FlipPassEditorModeAddEntry &&
+        app->editor_text_target == FlipPassEditorTextTargetEntryTitle) ||
+       (app->editor_mode == FlipPassEditorModeAddGroup &&
+        app->editor_text_target == FlipPassEditorTextTargetGroupName)) {
+        flippass_editor_open_text_target(app, app->editor_text_target);
+        return;
+    }
     if(app->password_gen_auto_open_field_name &&
        app->editor_mode == FlipPassEditorModeAddCustomField &&
        app->editor_custom_field_name[0] == '\0') {
@@ -2422,6 +2429,16 @@ bool flippass_scene_editor_on_event(void* context, SceneManagerEvent event) {
 
 void flippass_scene_editor_on_exit(void* context) {
     App* app = context;
+    app->editor_selected_index =
+        variable_item_list_get_selected_item_index(app->variable_item_list);
+    variable_item_list_reset(app->variable_item_list);
+    flippass_editor_config_layout_unload_plugin(app);
+    dialog_ex_reset(app->dialog_ex);
+}
+
+void flippass_scene_editor_trim_for_save(struct App* app) {
+    furi_assert(app);
+
     app->editor_selected_index =
         variable_item_list_get_selected_item_index(app->variable_item_list);
     variable_item_list_reset(app->variable_item_list);

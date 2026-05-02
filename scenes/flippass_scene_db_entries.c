@@ -296,7 +296,9 @@ static void flippass_browser_prepare_group_editor(
     const char* initial_name) {
     app->editor_mode = mode;
     app->editor_parent_mode = FlipPassEditorModeNone;
-    app->editor_text_target = FlipPassEditorTextTargetNone;
+    app->editor_text_target = (mode == FlipPassEditorModeAddGroup) ?
+                                  FlipPassEditorTextTargetGroupName :
+                                  FlipPassEditorTextTargetNone;
     app->editor_group = group;
     app->editor_entry = NULL;
     app->editor_selected_index = 0U;
@@ -318,7 +320,9 @@ static bool flippass_browser_prepare_entry_editor(
 
     app->editor_mode = mode;
     app->editor_parent_mode = FlipPassEditorModeNone;
-    app->editor_text_target = FlipPassEditorTextTargetNone;
+    app->editor_text_target = (mode == FlipPassEditorModeAddEntry) ?
+                                  FlipPassEditorTextTargetEntryTitle :
+                                  FlipPassEditorTextTargetNone;
     app->editor_group = app->current_group;
     app->editor_entry = entry;
     app->editor_selected_index =
@@ -848,6 +852,17 @@ bool flippass_scene_db_entries_on_event(void* context, SceneManagerEvent event) 
                     furi_string_free(error);
                     return true;
                 }
+                if(!flippass_browser_items_ensure()) {
+                    flippass_progress_reset(app);
+                    flippass_scene_status_show(
+                        app,
+                        "Open Failed",
+                        "Not enough RAM is available to list entries after saving.",
+                        FlipPassScene_FileBrowser);
+                    scene_manager_next_scene(app->scene_manager, FlipPassScene_Status);
+                    furi_string_free(error);
+                    return true;
+                }
 #endif
                 flippass_progress_reset(app);
                 if(app->editor_mode == FlipPassEditorModeModifyDatabase &&
@@ -1009,9 +1024,23 @@ bool flippass_scene_db_entries_on_event(void* context, SceneManagerEvent event) 
     return false;
 }
 
+void flippass_scene_db_entries_trim_for_save(struct App* app) {
+    furi_assert(app);
+
+    flippass_browser_sync_selection_from_view(app);
+    flippass_db_browser_view_set_action_menu_open(app->db_browser, false);
+    flippass_db_browser_view_set_back_filter(app->db_browser, NULL);
+    flippass_entry_action_cleanup_type_menu(app);
+    flippass_browser_items_free();
+    flippass_db_browser_view_reset(app->db_browser);
+    flippass_browser_hide_dialog(app, false);
+}
+
 void flippass_scene_db_entries_on_exit(void* context) {
     App* app = context;
-    flippass_browser_sync_selection_from_view(app);
+    if(flippass_browser_items != NULL) {
+        flippass_browser_sync_selection_from_view(app);
+    }
     flippass_db_browser_view_set_action_menu_open(app->db_browser, false);
     flippass_db_browser_view_set_back_filter(app->db_browser, NULL);
     flippass_entry_action_cleanup_type_menu(app);

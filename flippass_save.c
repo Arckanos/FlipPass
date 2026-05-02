@@ -3,6 +3,9 @@
 #include "kdbx/kdbx_constants.h"
 #include "kdbx/memzero.h"
 #include "plugins/flippass_save_plugin.h"
+#include "scenes/flippass_scene.h"
+#include "scenes/flippass_scene_db_entries.h"
+#include "scenes/flippass_scene_editor.h"
 
 #include <storage/storage.h>
 
@@ -191,6 +194,8 @@ static void flippass_save_remove_temp_file(const char* target_path) {
 }
 
 static void flippass_save_unload_runtime_modules(App* app) {
+    flippass_db_deactivate_entry(app);
+    FLIPPASS_MEMORY_LOG(app, "save_after_entry_deactivate", 0U);
     flippass_output_cleanup(app);
     flippass_module_unload(app, FlipPassModuleSlotOutputUsb);
     flippass_module_unload(app, FlipPassModuleSlotOutputBle);
@@ -209,7 +214,18 @@ static void flippass_save_unload_runtime_modules(App* app) {
     flippass_module_unload(app, FlipPassModuleSlotOpenModel);
     flippass_module_unload(app, FlipPassModuleSlotSaveHeader);
     flippass_module_unload(app, FlipPassModuleSlotSaveWriter);
-    flippass_db_deactivate_entry(app);
+}
+
+static void flippass_save_trim_ui_for_save(App* app) {
+    const uint32_t current_scene = scene_manager_get_current_scene(app->scene_manager);
+
+    FLIPPASS_MEMORY_LOG(app, "save_before_ui_trim", 0U);
+    if(current_scene == FlipPassScene_DbEntries) {
+        flippass_scene_db_entries_trim_for_save(app);
+    } else if(current_scene == FlipPassScene_Editor) {
+        flippass_scene_editor_trim_for_save(app);
+    }
+    FLIPPASS_MEMORY_LOG(app, "save_after_ui_trim", 0U);
 }
 
 bool flippass_save_current_database(
@@ -225,6 +241,7 @@ bool flippass_save_current_database(
         (unsigned long)app->database_cipher,
         (unsigned long)app->database_compression,
         (unsigned long)app->database_kdf_rounds);
+    flippass_save_trim_ui_for_save(app);
     view_dispatcher_switch_to_view(app->view_dispatcher, AppViewLoading);
     const bool ok = flippass_save_execute(
         app,
